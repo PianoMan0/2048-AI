@@ -1,133 +1,36 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>2048 AI</title>
-
-  <link href="style/main.css" rel="stylesheet" type="text/css">
-  <link rel="shortcut icon" href="favicon.ico">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5f0">
+  <meta name="description" content="A piano that learns from the notes people play.">
+  <title>Piano</title>
+  <link rel="icon" href="meta/piano-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="meta/apple-touch-icon.png">
-  <link rel="apple-touch-startup-image" href="meta/apple-touch-startup-image-640x1096.png" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)"> <!-- iPhone 5+ -->
-  <link rel="apple-touch-startup-image" href="meta/apple-touch-startup-image-640x920.png"  media="(device-width: 320px) and (device-height: 480px) and (-webkit-device-pixel-ratio: 2)"> <!-- iPhone, retina -->
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="description" content="Watch various AI's play 2048!">
-  <meta name="author" content="Angela Qian">
-  <meta name="keywords" content="2048 ai, 2048, 2048 game, 2048 artificial intelligence, 2048 ai player, 2048 player, 2048 bot, 2048 agent, bot 2048, player 2048, ai 2048, ai player 2048">
-  <meta name="HandheldFriendly" content="True">
-  <meta name="MobileOptimized" content="320">
-  <meta name="viewport" content="width=device-width, target-densitydpi=160dpi, initial-scale=1.0, maximum-scale=1, user-scalable=no, minimal-ui">
+  <link href="style/main.css" rel="stylesheet" type="text/css">
 </head>
-
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-BEBPJYJ7SH"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-BEBPJYJ7SH');
-</script>
-
 <body>
-  <div class="container">
-    <div class="heading">
-      <h1 class="title">2048 AI</h1>
-      <div class="scores-container">
-        <div class="score-container">0</div>
-        <div class="best-container">0</div>
+  <main class="container">
+    <header class="topbar">
+      <h1 class="title">Piano AI</h1>
+      <div class="controls">
+        <button class="play-button" id="play-toggle" type="button">Play</button>
+        <button class="clear-button" id="reset-button" type="button">Clear</button>
       </div>
-    </div>
+    </header>
 
-    <div class="above-game">
-      <p class="game-intro">Join the numbers and get to the <strong>2048 tile!</strong></p>
-      <a class="restart-button">New Game</a>
-    </div>
-
-    <div class="game-container">
-      <div class="game-message">
-        <p></p>
-        <div class="lower">
-	        <a class="keep-playing-button">Keep going</a>
-          <a class="retry-button">Try again</a>
-        </div>
+    <section class="piano-card" aria-label="88-key piano">
+      <div class="piano-scroll" id="piano-scroll" tabindex="0" aria-label="Scroll across the piano keys">
+        <div class="piano" id="piano" role="group" aria-label="Piano keys from A0 to C8"></div>
       </div>
+    </section>
 
-      <div class="grid-container">
-        <div class="grid-row">
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-        </div>
-        <div class="grid-row">
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-        </div>
-        <div class="grid-row">
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-        </div>
-        <div class="grid-row">
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-          <div class="grid-cell"></div>
-        </div>
-      </div>
-
-      <div class="tile-container">
-
-      </div>
-    </div>
-
-
-    <div class="ai-panel">
-      <div class="ai-panel-header">AI Mode:</div>
-      <label title="You, the player!"><input type="radio" name="ai-mode" class="player-button" checked />None</label><br />
-      <div class="ai-panel-header">Speed:</div>
-      <input type="range" id="ai-speed-slider" name="ai-speed" min="0" max="100" value="50" step="1" />
-      <div class="speed-labels">
-        <span>Slow</span>
-        <span>Fast</span>
-      </div>
-      <div class="ai-panel-header">Tile generator:</div>
-      <label><input type="radio" name="ai-tilegen" class="easy-tile-button" />Easy Mode</label><br />
-      <label><input type="radio" name="ai-tilegen" class="random-tile-button" checked />Normal</label><br />
-      <label><input type="radio" name="ai-tilegen" class="hard-tile-button" />Hard Mode</label><br />
-      <div class="stats-container"></div>
-    </div>
-
-
-    <p class="game-explanation">
-      <strong class="important">How to play:</strong> Use your <strong>arrow keys</strong> to move the tiles. When two tiles with the same number touch, they <strong>merge into one!</strong>
-    </p>
-    <hr>
-    <p>
-      <strong class="important">Notes:</strong>
-      <ul>
-        <li>This site is NOT the official version of 2048. You can play the original version <a href="https://gabrielecirulli.github.io/2048/">here.</a></li>
-        <li><a href="https://angelazqian.github.io/sighorse.pdf">How I made this (+ cats)</a></li>
-        <li>Have fun!</li>
-      </ul>
-    </p>
-    <hr>
-  </div>
-
-  <script src="js/bind_polyfill.js"></script>
-  <script src="js/classlist_polyfill.js"></script>
-  <script src="js/animframe_polyfill.js"></script>
-  <script src="js/keyboard_input_manager.js"></script>
-  <script src="js/html_actuator.js"></script>
-  <script src="js/grid.js"></script>
-  <script src="js/tile.js"></script>
-  <script src="js/local_storage_manager.js"></script>
-  <script src="js/game_manager.js"></script>
+    <div class="melody" id="melody" aria-label="Recent notes"></div>
+    <p class="privacy-note">Note patterns are shared anonymously to improve playback.</p>
+    <p class="status" id="status" aria-live="polite"></p>
+  </main>
+  <script src="model/piano_model.js"></script>
   <script src="js/application.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
 </body>
 </html>

@@ -1,6 +1,9 @@
 .sass-cache/
 .vscode/
+.vercel/
 venv/
 tfenv/
 data/
+.env
+.env.*
 .DS_Store
