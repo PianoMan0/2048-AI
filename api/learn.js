@@ -3,7 +3,8 @@
 var redis = require("../lib/redis").command;
 
 var MAX_EXAMPLES_PER_BATCH = 64;
-var MAX_EXAMPLES_PER_HOUR = 50000;
+var MAX_EXAMPLES_PER_DAY = 50000;
+var MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 var NOTE_COUNT = 88;
 var CONTEXT_LENGTH = 4;
 
@@ -16,7 +17,7 @@ var INGEST_SCRIPT = [
   "local maximum = tonumber(ARGV[1])",
   "if current + incoming > maximum then return -1 end",
   "local total = redis.call('INCRBY', KEYS[1], incoming)",
-  "if current == 0 then redis.call('EXPIRE', KEYS[1], 7200) end",
+  "if current == 0 then redis.call('EXPIRE', KEYS[1], 172800) end",
   "for index = 2, #ARGV, 2 do",
   "  redis.call('HINCRBY', KEYS[2], ARGV[index], tonumber(ARGV[index + 1]))",
   "end",
@@ -55,10 +56,10 @@ module.exports = async function (request, response) {
   var parsed = parseExamples(request.body);
   if (!parsed) return response.status(400).json({ error: "Invalid note examples." });
 
-  var hour = Math.floor(Date.now() / 3600000);
+  var day = Math.floor(Date.now() / MILLISECONDS_PER_DAY);
   var args = [
-    "EVAL", INGEST_SCRIPT, "2", "piano:ingest:" + hour, "piano:pending",
-    String(MAX_EXAMPLES_PER_HOUR)
+    "EVAL", INGEST_SCRIPT, "2", "piano:ingest:" + day, "piano:pending",
+    String(MAX_EXAMPLES_PER_DAY)
   ];
   Object.keys(parsed.increments).forEach(function (field) {
     args.push(field, String(parsed.increments[field]));
@@ -67,7 +68,7 @@ module.exports = async function (request, response) {
   try {
     var accepted = await redis(args);
     if (accepted === -1) {
-      return response.status(429).json({ error: "Hourly contribution limit reached." });
+      return response.status(429).json({ error: "Daily contribution limit reached." });
     }
     return response.status(202).json({ accepted: parsed.count });
   } catch (error) {

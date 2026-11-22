@@ -4,6 +4,7 @@
   var FIRST_MIDI_NOTE = 21;
   var LAST_MIDI_NOTE = 108;
   var CONTEXT_LENGTH = 4;
+  var MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
   var FLUSH_BATCH_SIZE = 64;
   var MAX_QUEUED_EXAMPLES = 2000;
   var NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -302,7 +303,7 @@
       if (response.status === 429) {
         trainingQueue = batch.concat(trainingQueue).slice(-MAX_QUEUED_EXAMPLES);
         setStatus("Shared learning is busy; your notes are saved here.");
-        retryDelay = 3600000 - (Date.now() % 3600000) + 1000;
+        retryDelay = MILLISECONDS_PER_DAY - (Date.now() % MILLISECONDS_PER_DAY) + 1000;
       } else if (!response.ok) {
         throw new Error("Shared learning is temporarily unavailable.");
       } else {
