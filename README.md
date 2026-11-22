@@ -2,26 +2,20 @@
 
 An 88-key piano that learns from the notes people play and can continue a melody.
 
-Play a key or use `A W S E D F T G Y H U J K` around middle C. Drag the keyboard horizontally to reach the full A0–C8 range. Press **Play** to hear a continuation; **Clear** resets only your local notes and model.
+Play a key or use `A W S E D F T G Y H U J K` around middle C. Drag the keyboard horizontally to reach the full A0–C8 range. Press **Play** to hear a continuation; **Clear** resets your local notes and model.
 
-The piano keeps a private model in the browser and submits anonymous note transitions (the last four notes and the next note) to the shared model. It does not submit accounts, names, or raw play sessions. A scheduled job trains the shared model daily, and open pages refresh it hourly.
-
-The public learning endpoint accepts up to 50,000 note examples per UTC day to limit abuse. If that limit is reached, the browser queues a limited number of notes and retries at the start of the next UTC day.
+The browser learns a private model and sends anonymous note transitions (the last four notes and the next note) to train a shared model. It does not submit accounts, names, or raw play sessions. Shared model updates are stored in Vercel Blob and are available to all visitors.
 
 ## Deploy to Vercel
 
-1. Import this repository into Vercel and connect an Upstash Redis database through the Vercel Marketplace.
-   The project uses Vercel's **Other** framework preset; the root `requirements.txt` is for model notebooks, not a Flask web app.
-2. Add these Production environment variables in Vercel:
-   - `UPSTASH_REDIS_REST_URL`
-   - `UPSTASH_REDIS_REST_TOKEN`
-   - `CRON_SECRET` — a long random secret used to protect model training.
-3. Deploy to Production. `vercel.json` schedules `/api/cron/train` daily at midnight UTC.
+1. Import this repository into Vercel.
+2. In the project's **Storage** tab, create a **private Vercel Blob** store and connect it to the project. Vercel provides the function credentials automatically; no Upstash account or separate storage provider is needed.
+3. Deploy to Production. The shared model updates as new note batches arrive; no cron job is required.
 
-Vercel Hobby supports daily Cron Jobs, so no Pro plan is required. Cron Jobs run against the Production deployment. The shared model is trained from anonymous aggregated note transitions in Redis; Upstash is the only persistence service required.
+Vercel Blob is available on Hobby plans. Storage and transfer usage are subject to Vercel's current limits and pricing. The project uses Vercel's **Other** framework preset because the root `requirements.txt` is for the model notebooks, not a Flask web app.
 
-For local development, set the same variables in `.env.local` and run `npx vercel dev`. Opening `index.html` directly still works as a local piano, but shared learning requires the Vercel API and Redis. No application packages need to be installed.
+For local development, connect the Blob store to the Development environment, pull the Vercel environment variables, and run `npx vercel dev`. Opening `index.html` directly still works as a local piano, but shared learning requires the Vercel API and Blob store.
 
 ## How it works
 
-The model is an online softmax classifier trained on note transitions. Each daily run folds the newly collected examples into the shared model. Playback blends that model with your locally learned one. Piano tones are synthesized and cached in the browser; no audio samples or external audio service are used.
+The shared online softmax classifier is updated from note transitions using conditional writes, so simultaneous visitors don't overwrite each other's contributions. Contributions are limited to 50,000 examples per UTC day. Playback blends the shared model with the model learned locally in your browser. Piano tones are synthesized and cached in the browser; no audio samples or external audio service are used.

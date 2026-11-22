@@ -1,49 +1,36 @@
 "use strict";
 
-var redis = require("../lib/redis").command;
+var SharedModel = require("../lib/shared_model");
+var PianoModel = require("../model/piano_model");
 
 var MAX_EXAMPLES_PER_BATCH = 64;
-var MAX_EXAMPLES_PER_DAY = 50000;
-var MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+var MAX_REQUEST_IDS = 1600;
 var NOTE_COUNT = 88;
 var CONTEXT_LENGTH = 4;
-
-var INGEST_SCRIPT = [
-  "local current = tonumber(redis.call('GET', KEYS[1]) or '0')",
-  "local incoming = 0",
-  "for index = 3, #ARGV, 2 do",
-  "  incoming = incoming + tonumber(ARGV[index])",
-  "end",
-  "local maximum = tonumber(ARGV[1])",
-  "if current + incoming > maximum then return -1 end",
-  "local total = redis.call('INCRBY', KEYS[1], incoming)",
-  "if current == 0 then redis.call('EXPIRE', KEYS[1], 172800) end",
-  "for index = 2, #ARGV, 2 do",
-  "  redis.call('HINCRBY', KEYS[2], ARGV[index], tonumber(ARGV[index + 1]))",
-  "end",
-  "return total"
-].join("\n");
-
-function isNote(note) {
-  return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT;
-}
+var REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
 function parseExamples(body) {
   var examples = body && body.examples;
   if (!Array.isArray(examples) || examples.length === 0 ||
       examples.length > MAX_EXAMPLES_PER_BATCH) return null;
 
-  var increments = Object.create(null);
   for (var index = 0; index < examples.length; index++) {
     var example = examples[index];
     if (!example || !Array.isArray(example.context) ||
-        example.context.length > CONTEXT_LENGTH || !isNote(example.note) ||
-        !example.context.every(isNote)) return null;
-
-    var field = example.context.join(",") + "|" + example.note;
-    increments[field] = (increments[field] || 0) + 1;
+        example.context.length > CONTEXT_LENGTH ||
+        !Number.isInteger(example.note) || example.note < 0 ||
+        example.note >= NOTE_COUNT ||
+        !example.context.every(function (note) {
+          return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT;
+        })) return null;
   }
-  return { count: examples.length, increments: increments };
+  return examples;
+}
+
+function pause(milliseconds) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
 module.exports = async function (request, response) {
@@ -53,26 +40,57 @@ module.exports = async function (request, response) {
     return response.status(405).json({ error: "Method not allowed." });
   }
 
-  var parsed = parseExamples(request.body);
-  if (!parsed) return response.status(400).json({ error: "Invalid note examples." });
-
-  var day = Math.floor(Date.now() / MILLISECONDS_PER_DAY);
-  var args = [
-    "EVAL", INGEST_SCRIPT, "2", "piano:ingest:" + day, "piano:pending",
-    String(MAX_EXAMPLES_PER_DAY)
-  ];
-  Object.keys(parsed.increments).forEach(function (field) {
-    args.push(field, String(parsed.increments[field]));
-  });
-
-  try {
-    var accepted = await redis(args);
-    if (accepted === -1) {
-      return response.status(429).json({ error: "Daily contribution limit reached." });
-    }
-    return response.status(202).json({ accepted: parsed.count });
-  } catch (error) {
-    console.error("Could not save shared piano examples:", error.message);
-    return response.status(503).json({ error: "Shared learning is unavailable." });
+  var examples = parseExamples(request.body);
+  var requestId = request.body && request.body.requestId;
+  if (!examples || typeof requestId !== "string" ||
+      !REQUEST_ID_PATTERN.test(requestId)) {
+    return response.status(400).json({ error: "Invalid note examples." });
   }
+
+  for (var attempt = 0; attempt < 8; attempt++) {
+    try {
+      var day = SharedModel.utcDay();
+      var saved = await SharedModel.readRecord();
+      if (!saved) {
+        await SharedModel.createRecordIfMissing(SharedModel.createRecord(day));
+        continue;
+      }
+
+      var record = saved.record;
+      if (record.recentRequestIds.indexOf(requestId) !== -1) {
+        return response.status(202).json({ accepted: examples.length, duplicate: true });
+      }
+
+      var dailyExamples = record.contributionDate === day ? record.dailyExamples : 0;
+      if (dailyExamples + examples.length > SharedModel.maxExamplesPerDay) {
+        return response.status(429).json({ error: "Daily contribution limit reached." });
+      }
+
+      examples.forEach(function (example) {
+        PianoModel.learnFromContext(record.model, example.context, example.note);
+      });
+      record.model.trainedAt = new Date().toISOString();
+      record.contributionDate = day;
+      record.dailyExamples = dailyExamples + examples.length;
+      record.recentRequestIds.push(requestId);
+      if (record.recentRequestIds.length > MAX_REQUEST_IDS) {
+        record.recentRequestIds.shift();
+      }
+
+      try {
+        await SharedModel.saveRecord(record, saved.etag);
+        return response.status(202).json({ accepted: examples.length });
+      } catch (error) {
+        var latest = await SharedModel.readRecord();
+        if (!latest || latest.etag === saved.etag) throw error;
+      }
+    } catch (error) {
+      console.error("Could not save shared piano examples:", error.message);
+      return response.status(503).json({ error: "Shared learning is unavailable." });
+    }
+
+    await pause((attempt + 1) * 25);
+  }
+
+  return response.status(503).json({ error: "Shared model is busy. Please retry." });
 };

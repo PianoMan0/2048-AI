@@ -37,6 +37,7 @@
   var trainingTimer = null;
   var sendingTraining = false;
   var lastSharedFetch = 0;
+  var retryBatchId = null;
   var canSync = window.location.protocol !== "file:";
 
   function midiForNote(index) {
@@ -268,6 +269,13 @@
     playNextNote();
   }
 
+  function createBatchId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
   function queueTrainingExample(context, note) {
     if (!canSync) return;
     if (trainingQueue.length >= MAX_QUEUED_EXAMPLES) {
@@ -290,27 +298,31 @@
     if (!canSync || sendingTraining || !trainingQueue.length) return;
 
     var batch = trainingQueue.splice(0, FLUSH_BATCH_SIZE);
+    var batchId = retryBatchId || createBatchId();
     sendingTraining = true;
     var retryDelay = 0;
     try {
       var response = await window.fetch("/api/learn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ examples: batch }),
+        body: JSON.stringify({ requestId: batchId, examples: batch }),
         keepalive: true
       });
 
       if (response.status === 429) {
         trainingQueue = batch.concat(trainingQueue).slice(-MAX_QUEUED_EXAMPLES);
+        retryBatchId = batchId;
         setStatus("Shared learning is busy; your notes are saved here.");
         retryDelay = MILLISECONDS_PER_DAY - (Date.now() % MILLISECONDS_PER_DAY) + 1000;
       } else if (!response.ok) {
         throw new Error("Shared learning is temporarily unavailable.");
       } else {
+        retryBatchId = null;
         if (status.textContent.indexOf("Shared") === 0) setStatus("");
       }
     } catch (error) {
       trainingQueue = batch.concat(trainingQueue).slice(-MAX_QUEUED_EXAMPLES);
+      retryBatchId = batchId;
       setStatus("Shared learning is unavailable; your notes are saved here.");
       retryDelay = 60000;
     } finally {

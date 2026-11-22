@@ -1,6 +1,6 @@
 "use strict";
 
-var redis = require("../lib/redis").command;
+var SharedModel = require("../lib/shared_model");
 var PianoModel = require("../model/piano_model");
 
 module.exports = async function (request, response) {
@@ -11,10 +11,8 @@ module.exports = async function (request, response) {
   }
 
   try {
-    var saved = await redis(["GET", "piano:global-model"]);
-    var model = saved ? JSON.parse(saved) : PianoModel.create();
-    if (!PianoModel.isValid(model)) throw new Error("Stored model is invalid.");
-
+    var saved = await SharedModel.readRecord();
+    var model = saved ? saved.record.model : PianoModel.create();
     return response.status(200).json({
       version: model.version,
       weights: model.weights,
