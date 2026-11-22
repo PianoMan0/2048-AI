@@ -11,6 +11,7 @@ The public learning endpoint accepts up to 50,000 note examples per UTC day to l
 ## Deploy to Vercel
 
 1. Import this repository into Vercel and connect an Upstash Redis database through the Vercel Marketplace.
+   The project uses Vercel's **Other** framework preset; the root `requirements.txt` is for model notebooks, not a Flask web app.
 2. Add these Production environment variables in Vercel:
    - `UPSTASH_REDIS_REST_URL`
    - `UPSTASH_REDIS_REST_TOKEN`
