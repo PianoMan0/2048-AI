@@ -4,6 +4,7 @@ var SharedModel = require("../lib/shared_model");
 var PianoModel = require("../model/piano_model");
 
 var MAX_EXAMPLES_PER_BATCH = 64;
+var MAX_WRITE_ATTEMPTS = 12;
 var MAX_REQUEST_IDS = 1600;
 var NOTE_COUNT = 88;
 var CONTEXT_LENGTH = 4;
@@ -33,6 +34,12 @@ function pause(milliseconds) {
   });
 }
 
+function isEtagConflict(error) {
+  return error &&
+    (error.name === "BlobPreconditionFailedError" ||
+     error.message === "Vercel Blob: Precondition failed: ETag mismatch.");
+}
+
 module.exports = async function (request, response) {
   response.setHeader("Cache-Control", "no-store");
   if (request.method !== "POST") {
@@ -47,7 +54,7 @@ module.exports = async function (request, response) {
     return response.status(400).json({ error: "Invalid note examples." });
   }
 
-  for (var attempt = 0; attempt < 8; attempt++) {
+  for (var attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
     try {
       var day = SharedModel.utcDay();
       var saved = await SharedModel.readRecord();
@@ -81,16 +88,18 @@ module.exports = async function (request, response) {
         await SharedModel.saveRecord(record, saved.etag);
         return response.status(202).json({ accepted: examples.length });
       } catch (error) {
-        var latest = await SharedModel.readRecord();
-        if (!latest || latest.etag === saved.etag) throw error;
+        if (!isEtagConflict(error)) throw error;
       }
     } catch (error) {
       console.error("Could not save shared piano examples:", error.message);
       return response.status(503).json({ error: "Shared learning is unavailable." });
     }
 
-    await pause((attempt + 1) * 25);
+    if (attempt + 1 < MAX_WRITE_ATTEMPTS) {
+      await pause(Math.min((attempt + 1) * 50, 500));
+    }
   }
 
+  console.error("Could not save shared piano examples after ETag retries.");
   return response.status(503).json({ error: "Shared model is busy. Please retry." });
 };
