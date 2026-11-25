@@ -1,3 +1,8 @@
+<?php
+declare(strict_types=1);
+header('Content-Type: text/html; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,18 +22,20 @@
       <p>Train an AI model with your playing!</p>
       <div class="controls">
         <button class="play-button" id="play-toggle" type="button">Play</button>
-        <button class="clear-button" id="reset-button" type="button">Clear</button>
+        <a class="text-link" href="about.php">About</a>
       </div>
     </header>
 
     <section class="piano-card" aria-label="88-key piano">
-      <div class="piano-scroll" id="piano-scroll" tabindex="0" aria-label="Scroll across the piano keys">
-        <div class="piano" id="piano" role="group" aria-label="Piano keys from A0 to C8"></div>
+      <div class="piano-range">
+        <button class="range-button" id="range-previous" type="button" aria-label="Previous octave">‹</button>
+        <span class="range-label" id="range-label" aria-live="polite"></span>
+        <button class="range-button" id="range-next" type="button" aria-label="Next octave">›</button>
       </div>
+      <div class="piano" id="piano" role="group" aria-label="Piano keys"></div>
     </section>
 
     <div class="melody" id="melody" aria-label="Recent notes"></div>
-    <p class="privacy-note">Anonymous note patterns help train a shared model.</p>
     <p class="status" id="status" aria-live="polite"></p>
   </main>
   <script src="model/piano_model.js"></script>

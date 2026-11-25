@@ -1,21 +1,31 @@
 # Piano
 
-An 88-key piano that learns from the notes people play and can continue a melody.
+An 88-key piano that learns from the notes and chords people play and can continue a melody. Visit the About page for a live shared-model example count and a short explanation of how it works.
 
-Play a key or use `A W S E D F T G Y H U J K` around middle C. Drag the keyboard horizontally to reach the full A0–C8 range. Press **Play** to hear a continuation; **Clear** resets your local notes and model.
+Play a key or use `A W S E D F T G Y H U J K` around middle C. Use the octave arrows to move across the full A0–C8 range without horizontal scrolling. Press **Play** to hear a continuation. The model only plays notes you have played locally, and learns notes struck together as chords.
 
-The browser learns a private model and sends anonymous note transitions (the last four notes and the next note) to train a shared model. It does not submit accounts, names, or raw play sessions. Shared model updates are stored in Vercel Blob and are available to all visitors.
+The browser learns a private model and sends anonymous note transitions (the last four notes and the next note or chord) to train a shared model. It does not submit accounts, names, or raw play sessions. Shared model updates are stored in SQLite and are available to all visitors.
 
-## Deploy to Vercel
+## Requirements
 
-1. Import this repository into Vercel.
-2. In the project's **Storage** tab, create a **private Vercel Blob** store and connect it to the project. Vercel provides the function credentials automatically; no Upstash account or separate storage provider is needed.
-3. Deploy to Production. The shared model updates as new note batches arrive; no cron job is required.
+- PHP 8.1 or newer
+- PDO SQLite enabled
+- A persistent, writable directory for the SQLite database
 
-Vercel Blob is available on Hobby plans. Storage and transfer usage are subject to Vercel's current limits and pricing. The project uses Vercel's **Other** framework preset because the root `requirements.txt` is for the model notebooks, not a Flask web app.
+## Run locally
 
-For local development, connect the Blob store to the Development environment, pull the Vercel environment variables, and run `npx vercel dev`. Opening `index.html` directly still works as a local piano, but shared learning requires the Vercel API and Blob store.
+From the project directory, start PHP's built-in web server:
+
+```sh
+php -S 127.0.0.1:8000
+```
+
+Open <http://127.0.0.1:8000>. The SQLite database is created outside the project directory by default. To choose another persistent location, set `PIANO_DB_PATH` to an absolute file path before starting PHP. The database directory must be writable by the PHP process.
+
+## Deploy
+
+Deploy the project to a PHP 8.1+ host with PDO SQLite enabled. Configure the web server's document root to this project directory and ensure the PHP process can write to the directory containing the SQLite database. Set `PIANO_DB_PATH` to a persistent path outside the public document root for production deployments. Back up this database to preserve shared learning.
 
 ## How it works
 
-The shared online softmax classifier is updated from note transitions using conditional writes, so simultaneous visitors don't overwrite each other's contributions. Contributions are limited to 50,000 examples per UTC day. Playback blends the shared model with the model learned locally in your browser. Piano tones are synthesized and cached in the browser; no audio samples or external audio service are used.
+The PHP API stores the shared multi-label classifier in SQLite and updates it within a write transaction, so simultaneous visitors don't overwrite each other's contributions. Contributions are limited to 50,000 examples per UTC day. Playback blends the shared model with the model learned locally in your browser, while restricting generated notes to the notes played locally. Piano tones and interactive key handling run in browser JavaScript, and are synthesized and cached locally. No audio samples or external audio service are used.

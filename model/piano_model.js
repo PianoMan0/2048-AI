@@ -15,10 +15,11 @@
   var FEATURE_COUNT = NOTE_COUNT * CONTEXT_LENGTH;
   var STORAGE_KEY = "piano-88-model-v2";
   var LEARNING_RATE = 0.18;
+  var MAX_WEIGHT = 100000;
 
   function create() {
     return {
-      version: 2,
+      version: 3,
       weights: Array.from({ length: NOTE_COUNT }, function () {
         return Array(FEATURE_COUNT + 1).fill(0);
       }),
@@ -28,17 +29,21 @@
   }
 
   function isValid(model) {
-    return model && model.version === 2 &&
+    return model && (model.version === 2 || model.version === 3) &&
       Array.isArray(model.weights) && model.weights.length === NOTE_COUNT &&
       model.weights.every(function (row) {
         return Array.isArray(row) && row.length === FEATURE_COUNT + 1 &&
-          row.every(function (weight) { return Number.isFinite(weight); });
+          row.every(function (weight) {
+            return Number.isFinite(weight) &&
+              Math.abs(weight) <= MAX_WEIGHT;
+          });
       }) &&
       Array.isArray(model.history) && model.history.length <= 10000 &&
       model.history.every(function (note) {
         return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT;
       }) &&
-      Number.isInteger(model.examples) && model.examples >= model.history.length;
+      Number.isSafeInteger(model.examples) && model.examples >= 0 &&
+      (model.version !== 2 || model.examples >= model.history.length);
   }
 
   function load() {
@@ -47,7 +52,10 @@
       if (!saved) return { model: create(), warning: false };
 
       var model = JSON.parse(saved);
-      if (isValid(model)) return { model: model, warning: false };
+      if (isValid(model)) {
+        model.version = 3;
+        return { model: model, warning: false };
+      }
     } catch (error) {
       return { model: create(), warning: true };
     }
@@ -56,6 +64,7 @@
   }
 
   function save(model) {
+    if (!isValid(model)) return false;
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(model));
       return true;
@@ -65,7 +74,11 @@
   }
 
   function activeFeatures(history) {
-    var context = history.slice(-CONTEXT_LENGTH);
+    var context = (Array.isArray(history) ? history : [])
+      .slice(-CONTEXT_LENGTH)
+      .filter(function (note) {
+        return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT;
+      });
     var offset = CONTEXT_LENGTH - context.length;
     var active = context.map(function (note, index) {
       return (offset + index) * NOTE_COUNT + note;
@@ -75,18 +88,25 @@
   }
 
   function probabilities(model, history) {
+    if (!model || !Array.isArray(model.weights) ||
+        model.weights.length !== NOTE_COUNT) {
+      return Array(NOTE_COUNT).fill(0);
+    }
     var active = activeFeatures(history);
     var logits = model.weights.map(function (row) {
+      if (!Array.isArray(row) || row.length !== FEATURE_COUNT + 1) {
+        return 0;
+      }
       return active.reduce(function (sum, index) {
-        return sum + row[index];
+        var weight = row[index];
+        return Number.isFinite(weight) ? sum + weight : sum;
       }, 0);
     });
-    var maxLogit = Math.max.apply(null, logits);
-    var scores = logits.map(function (logit) {
-      return Math.exp(logit - maxLogit);
+    return logits.map(function (logit) {
+      if (logit >= 0) return 1 / (1 + Math.exp(-logit));
+      var exp = Math.exp(logit);
+      return exp / (1 + exp);
     });
-    var total = scores.reduce(function (sum, score) { return sum + score; }, 0);
-    return scores.map(function (score) { return score / total; });
   }
 
   function predict(model, history, sharedModel) {
@@ -99,33 +119,72 @@
     });
   }
 
-  function learnFromContext(model, history, target) {
+  function learnFromContext(model, history, targetNotes) {
+    if (!isValid(model)) return false;
     var active = activeFeatures(history);
     var scores = probabilities(model, history);
+    var rawTargets = Array.isArray(targetNotes) ? targetNotes : [targetNotes];
+    var targets = rawTargets.filter(function (note, index) {
+      return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT &&
+        rawTargets.indexOf(note) === index;
+    });
+    if (!targets.length) return false;
 
     model.weights.forEach(function (row, note) {
-      var error = scores[note] - (note === target ? 1 : 0);
+      var error = scores[note] - (targets.indexOf(note) !== -1 ? 1 : 0);
       active.forEach(function (feature) {
-        row[feature] -= LEARNING_RATE * error;
+        var nextWeight = row[feature] - LEARNING_RATE * error;
+        row[feature] = Math.max(-MAX_WEIGHT, Math.min(MAX_WEIGHT,
+          Number.isFinite(nextWeight) ? nextWeight : 0));
       });
     });
     model.examples++;
+    return true;
   }
 
   function learn(model, note) {
-    learnFromContext(model, model.history, note);
-    model.history.push(note);
-    if (model.history.length > 10000) model.history.shift();
+    if (!model || !Array.isArray(model.history)) return false;
+    return learnChord(model, model.history, [note]);
+  }
+
+  function learnChord(model, history, notes) {
+    if (!model || !Array.isArray(model.history) || !Array.isArray(notes)) return false;
+    var validNotes = notes.filter(function (note) {
+      return Number.isInteger(note) && note >= 0 && note < NOTE_COUNT;
+    });
+    validNotes = validNotes.filter(function (note, index) {
+      return validNotes.indexOf(note) === index;
+    });
+    if (!validNotes.length) return false;
+    if (!learnFromContext(model, history, validNotes)) return false;
+    Array.prototype.push.apply(model.history, validNotes);
+    if (model.history.length > 10000) {
+      model.history.splice(0, model.history.length - 10000);
+    }
+    return true;
   }
 
   function sample(scores) {
-    var choice = Math.random();
     var total = 0;
+    var lastPositive = -1;
     for (var note = 0; note < scores.length; note++) {
-      total += scores[note];
-      if (choice <= total) return note;
+      if (Number.isFinite(scores[note]) && scores[note] > 0) {
+        total += scores[note];
+        lastPositive = note;
+      }
     }
-    return scores.length - 1;
+    if (lastPositive === -1) {
+      throw new Error("Cannot sample from scores without a positive value.");
+    }
+
+    var choice = Math.random() * total;
+    for (var index = 0; index < scores.length; index++) {
+      if (Number.isFinite(scores[index]) && scores[index] > 0) {
+        choice -= scores[index];
+        if (choice < 0) return index;
+      }
+    }
+    return lastPositive;
   }
 
   return {
@@ -134,6 +193,7 @@
     load: load,
     save: save,
     learn: learn,
+    learnChord: learnChord,
     learnFromContext: learnFromContext,
     predict: predict,
     sample: sample,

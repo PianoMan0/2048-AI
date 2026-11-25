@@ -3,7 +3,12 @@
 
   var FIRST_MIDI_NOTE = 21;
   var LAST_MIDI_NOTE = 108;
+  var VISIBLE_KEY_COUNT = 25;
+  var MIN_VISIBLE_MIDI = FIRST_MIDI_NOTE;
+  var MAX_VISIBLE_MIDI = LAST_MIDI_NOTE - VISIBLE_KEY_COUNT + 1;
   var CONTEXT_LENGTH = 4;
+  var CHORD_WINDOW_MS = 100;
+  var CHORD_THRESHOLD = 0.52;
   var MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
   var FLUSH_BATCH_SIZE = 64;
   var MAX_QUEUED_EXAMPLES = 2000;
@@ -18,7 +23,9 @@
   });
 
   var piano = document.getElementById("piano");
-  var pianoScroll = document.getElementById("piano-scroll");
+  var rangeLabel = document.getElementById("range-label");
+  var previousRangeButton = document.getElementById("range-previous");
+  var nextRangeButton = document.getElementById("range-next");
   var melody = document.getElementById("melody");
   var playButton = document.getElementById("play-toggle");
   var status = document.getElementById("status");
@@ -31,8 +38,11 @@
   var sampleBuffers = {};
   var isPlaying = false;
   var playbackTimer = null;
-  var highlightTimer = null;
+  var highlightTimers = {};
   var playbackContext = [];
+  var firstVisibleMidi = 48;
+  var pendingInputNotes = [];
+  var inputTimer = null;
   var trainingQueue = [];
   var trainingTimer = null;
   var sendingTraining = false;
@@ -48,9 +58,18 @@
     return NOTES[midi % 12] + (Math.floor(midi / 12) - 1);
   }
 
-  function buildPiano() {
+  function renderPianoRange() {
+    piano.textContent = "";
     var whiteKeysBefore = 0;
-    for (var midi = FIRST_MIDI_NOTE; midi <= LAST_MIDI_NOTE; midi++) {
+    var lastVisibleMidi = Math.min(LAST_MIDI_NOTE, firstVisibleMidi + VISIBLE_KEY_COUNT - 1);
+    for (var countMidi = firstVisibleMidi; countMidi <= lastVisibleMidi; countMidi++) {
+      if ([1, 3, 6, 8, 10].indexOf(countMidi % 12) === -1) whiteKeysBefore++;
+    }
+
+    var whiteKeyCount = whiteKeysBefore;
+    piano.style.setProperty("--white-key-count", String(whiteKeyCount));
+    whiteKeysBefore = 0;
+    for (var midi = firstVisibleMidi; midi <= lastVisibleMidi; midi++) {
       var index = midi - FIRST_MIDI_NOTE;
       var key = document.createElement("button");
       var pitchClass = midi % 12;
@@ -65,9 +84,10 @@
       key.title = note;
 
       if (isBlack) {
-        key.style.left = ((whiteKeysBefore - 0.31) / 52 * 100) + "%";
+        key.style.left = ((whiteKeysBefore - 0.31) / whiteKeyCount * 100) + "%";
       } else {
         whiteKeysBefore++;
+        key.style.flexBasis = (100 / whiteKeyCount) + "%";
         if (pitchClass === 0) {
           var octaveLabel = document.createElement("span");
           octaveLabel.className = "key-octave";
@@ -88,18 +108,9 @@
       }(index));
       piano.appendChild(key);
     }
-
-    centerMiddleC();
-  }
-
-  function centerMiddleC() {
-    var middleC = piano.querySelector('[data-midi="60"]');
-    if (middleC) {
-      pianoScroll.scrollLeft = Math.max(
-        0,
-        middleC.offsetLeft + middleC.offsetWidth / 2 - pianoScroll.clientWidth / 2
-      );
-    }
+    rangeLabel.textContent = noteName(firstVisibleMidi) + " – " + noteName(lastVisibleMidi);
+    previousRangeButton.disabled = firstVisibleMidi === MIN_VISIBLE_MIDI;
+    nextRangeButton.disabled = firstVisibleMidi === MAX_VISIBLE_MIDI;
   }
 
   function render() {
@@ -205,17 +216,22 @@
   }
 
   function highlight(noteIndex) {
-    if (highlightTimer) window.clearTimeout(highlightTimer);
-    piano.querySelectorAll(".key.active").forEach(function (key) {
-      key.classList.remove("active");
-    });
-
     var key = piano.querySelector('[data-note="' + noteIndex + '"]');
+    if (!key) {
+      var midi = midiForNote(noteIndex);
+      firstVisibleMidi = Math.max(
+        MIN_VISIBLE_MIDI,
+        Math.min(MAX_VISIBLE_MIDI, midi - Math.floor(VISIBLE_KEY_COUNT / 2))
+      );
+      renderPianoRange();
+      key = piano.querySelector('[data-note="' + noteIndex + '"]');
+    }
     if (!key) return;
     key.classList.add("active");
-    key.scrollIntoView({ block: "nearest", inline: "nearest" });
-    highlightTimer = window.setTimeout(function () {
+    if (highlightTimers[noteIndex]) window.clearTimeout(highlightTimers[noteIndex]);
+    highlightTimers[noteIndex] = window.setTimeout(function () {
       key.classList.remove("active");
+      delete highlightTimers[noteIndex];
     }, 350);
   }
 
@@ -230,35 +246,68 @@
 
   function notePlayed(noteIndex, learnFromNote) {
     if (learnFromNote) {
-      var context = model.history.slice(-CONTEXT_LENGTH);
       if (isPlaying) stopPlayback();
-      PianoModel.learn(model, noteIndex);
-      if (PianoModel.save(model)) setStatus("");
-      else setStatus("Notes could not be saved in this browser.");
-      queueTrainingExample(context, noteIndex);
-      render();
+      if (pendingInputNotes.indexOf(noteIndex) === -1) {
+        pendingInputNotes.push(noteIndex);
+      }
+      if (inputTimer) window.clearTimeout(inputTimer);
+      inputTimer = window.setTimeout(flushPendingInput, CHORD_WINDOW_MS);
     }
 
     playSound(noteIndex);
     highlight(noteIndex);
   }
 
+  function flushPendingInput() {
+    if (inputTimer) {
+      window.clearTimeout(inputTimer);
+      inputTimer = null;
+    }
+    if (!pendingInputNotes.length) return;
+
+    var notes = pendingInputNotes;
+    var context = model.history.slice(-CONTEXT_LENGTH);
+    pendingInputNotes = [];
+    PianoModel.learnChord(model, context, notes);
+    if (PianoModel.save(model)) setStatus("");
+    else setStatus("Notes could not be saved in this browser.");
+    queueTrainingExample(context, notes);
+    render();
+  }
+
   function playNextNote() {
     if (!isPlaying) return;
     var distribution = PianoModel.predict(model, playbackContext, sharedModel);
-    var note = PianoModel.sample(distribution);
-    notePlayed(note, false);
-    playbackContext.push(note);
-    if (playbackContext.length > CONTEXT_LENGTH) playbackContext.shift();
+    var playedNotes = model.history.filter(function (note, index, history) {
+      return history.indexOf(note) === index;
+    });
+    var candidateScores = Array(PianoModel.noteCount).fill(0);
+    playedNotes.forEach(function (note) {
+      candidateScores[note] = distribution[note];
+    });
+    var chord = [PianoModel.sample(candidateScores)];
+    playedNotes.forEach(function (note) {
+      if (chord[0] === note) return;
+      var probability = Math.max(0, Math.min(1,
+        (distribution[note] - CHORD_THRESHOLD) / (1 - CHORD_THRESHOLD)));
+      if (Math.random() < probability) chord.push(note);
+    });
+
+    chord.forEach(function (note) {
+      notePlayed(note, false);
+      playbackContext.push(note);
+      if (playbackContext.length > CONTEXT_LENGTH) playbackContext.shift();
+    });
     playbackTimer = window.setTimeout(playNextNote, 420);
   }
 
   function togglePlayback() {
+    if (pendingInputNotes.length) flushPendingInput();
     if (isPlaying) {
       stopPlayback();
       return;
     }
-    if (!model.examples) {
+    if (!model.history.length) {
       setStatus("Play a few notes first.");
       return;
     }
@@ -276,13 +325,13 @@
     return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
   }
 
-  function queueTrainingExample(context, note) {
+  function queueTrainingExample(context, notes) {
     if (!canSync) return;
     if (trainingQueue.length >= MAX_QUEUED_EXAMPLES) {
       trainingQueue.shift();
       setStatus("Shared learning is busy; this note is saved on your device.");
     }
-    trainingQueue.push({ context: context, note: note });
+    trainingQueue.push({ context: context, notes: notes });
     if (trainingQueue.length >= FLUSH_BATCH_SIZE) {
       flushTrainingQueue();
     } else if (!trainingTimer && !sendingTraining) {
@@ -302,7 +351,7 @@
     sendingTraining = true;
     var retryDelay = 0;
     try {
-      var response = await window.fetch("/api/learn", {
+      var response = await window.fetch("./api/learn.php", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: batchId, examples: batch }),
@@ -336,7 +385,7 @@
   async function loadSharedModel() {
     if (!canSync) return;
     try {
-      var response = await window.fetch("/api/model", { cache: "no-store" });
+      var response = await window.fetch("./api/model.php", { cache: "no-store" });
       if (!response.ok) throw new Error("Shared model is unavailable.");
       var nextModel = await response.json();
       if (!PianoModel.isValid(nextModel)) throw new Error("Shared model is invalid.");
@@ -351,14 +400,14 @@
   }
 
   playButton.addEventListener("click", togglePlayback);
-  document.getElementById("reset-button").addEventListener("click", function () {
-    stopPlayback();
-    model = PianoModel.create();
-    if (PianoModel.save(model)) setStatus("");
-    else setStatus("Notes could not be cleared in this browser.");
-    render();
+  previousRangeButton.addEventListener("click", function () {
+    firstVisibleMidi = Math.max(MIN_VISIBLE_MIDI, firstVisibleMidi - 12);
+    renderPianoRange();
   });
-
+  nextRangeButton.addEventListener("click", function () {
+    firstVisibleMidi = Math.min(MAX_VISIBLE_MIDI, firstVisibleMidi + 12);
+    renderPianoRange();
+  });
   document.addEventListener("keydown", function (event) {
     if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
     var target = event.target;
@@ -372,6 +421,7 @@
 
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
+      flushPendingInput();
       flushTrainingQueue();
     } else if (Date.now() - lastSharedFetch >= 3600000) {
       loadSharedModel();
@@ -382,11 +432,6 @@
     loadSharedModel();
     window.setInterval(loadSharedModel, 3600000);
   }
-  buildPiano();
+  renderPianoRange();
   render();
-  if (document.readyState === "complete") {
-    window.setTimeout(centerMiddleC, 0);
-  } else {
-    window.addEventListener("load", centerMiddleC, { once: true });
-  }
 }());
